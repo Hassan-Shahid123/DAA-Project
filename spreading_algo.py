@@ -1,11 +1,22 @@
-import matplotlib.pyplot as plt
-import networkx as nx
-from social_network import assign_demographics
 import random
-from simulation import visualize_simulation
+from analysis import plot_sird
+from analysis import print_simulation_statistics
 import copy
 
-def run_simulation(G, initial_infected, recovery_time=10, max_steps=100):
+
+def run_simulation(
+    G, initial_infected,
+    recovery_time=10,
+    death_prob_base=0.01,
+    max_steps=100,
+    quarantine_enabled=True,
+    quarantine_start_threshold=40,     # start later
+    quarantine_delay=3,                # delay after infection
+    quarantine_compliance_rate=0.8,    # 80% follow quarantine
+    quarantine_effectiveness=0.7       # 70% reduction in spreading power
+):
+
+
     status_history = []
     infection_stats = []
 
@@ -13,54 +24,97 @@ def run_simulation(G, initial_infected, recovery_time=10, max_steps=100):
         G.nodes[node]['status'] = 'I'
         G.nodes[node]['infected_since'] = 0
 
+    all_infected = set(initial_infected)
+
+    for node in G.nodes():
+        G.nodes[node]['quarantine_compliant'] = random.random() < quarantine_compliance_rate
+
+
+    quarantine_active = False
+
     for step in range(max_steps):
         new_infections = []
         recoveries = []
+        deaths = []
 
         for node in G.nodes():
             if G.nodes[node]['status'] == 'I':
-                for neighbor in G.neighbors(node):
-                    if G.nodes[neighbor]['status'] == 'S':
-                        p = G[node][neighbor]['transmission_prob'] * G.nodes[neighbor]['susceptibility']
-                        if random.random() < p:
-                            new_infections.append(neighbor)
+                if G.nodes[node]['status'] == 'I':
+                    is_quarantined = (
+                            quarantine_enabled and
+                            quarantine_active and
+                            G.nodes[node]['infected_since'] >= quarantine_delay and
+                            G.nodes[node]['quarantine_compliant']
+                    )
+
+                    for neighbor in G.neighbors(node):
+                        if G.nodes[neighbor]['status'] == 'S':
+                            multiplier = G.nodes[node].get('spread_multiplier', 1.0)
+                            p = G[node][neighbor]['transmission_prob'] * G.nodes[neighbor][
+                                'susceptibility'] * multiplier
+
+                            if is_quarantined:
+                                p *= (1 - quarantine_effectiveness)  # reduce infection probability
+
+                            if random.random() < p:
+                                new_infections.append(neighbor)
+
                 G.nodes[node]['infected_since'] += 1
                 if G.nodes[node]['infected_since'] >= recovery_time:
-                    recoveries.append(node)
+                    age = G.nodes[node]['age']
+                    if age <= 17:
+                        death_prob = 0.1
+                    elif age <= 49:
+                        death_prob = 0.2
+                    elif age <= 64:
+                        death_prob = 0.3
+                    else:
+                        death_prob = 0.5
+
+                    if random.random() < death_prob:
+                        deaths.append(node)
+                    else:
+                        recoveries.append(node)
 
         for node in new_infections:
             G.nodes[node]['status'] = 'I'
             G.nodes[node]['infected_since'] = 0
+            all_infected.add(node)
         for node in recoveries:
             G.nodes[node]['status'] = 'R'
+        for node in deaths:
+            G.nodes[node]['status'] = 'D'
+
+        if not quarantine_active and len(all_infected) >= quarantine_start_threshold:
+            print(f"\n[Step {step}] Quarantine policy activated due to rising infections.")
+            quarantine_active = True
 
         snapshot = {n: G.nodes[n]['status'] for n in G.nodes()}
         status_history.append(copy.deepcopy(snapshot))
 
+        # Record transmission edges (from infected to newly infected)
+        transmission_edges = [(src, tgt) for src in G.nodes() if G.nodes[src]['status'] == 'I'
+                              for tgt in G.neighbors(src) if tgt in new_infections]
+
+        if 'transmission_history' not in locals():
+            transmission_history = []
+        transmission_history.append(transmission_edges)
+
         S_count = sum(1 for n in G.nodes if G.nodes[n]['status'] == 'S')
         I_count = sum(1 for n in G.nodes if G.nodes[n]['status'] == 'I')
         R_count = sum(1 for n in G.nodes if G.nodes[n]['status'] == 'R')
+        D_count = sum(1 for n in G.nodes if G.nodes[n]['status'] == 'D')
 
-        infection_stats.append({'step': step, 'S': S_count, 'I': I_count, 'R': R_count})
+        infection_stats.append({'step': step, 'S': S_count, 'I': I_count, 'R': R_count, 'D': D_count})
 
         if I_count == 0:
-            print(f"Infection died out at step {step}")
+            print(f"\nInfection died out at step {step}.")
             break
 
-    return status_history, infection_stats
+    plot_sird(infection_stats)
+    print_simulation_statistics(infection_stats, all_infected)
+
+    return status_history, infection_stats, transmission_history, all_infected
 
 
-# steps = [s['step'] for s in infection_stats]
-# S = [s['S'] for s in infection_stats]
-# I = [s['I'] for s in infection_stats]
-# R = [s['R'] for s in infection_stats]
-#
-# plt.plot(steps, S, label='Susceptible')
-# plt.plot(steps, I, label='Infected')
-# plt.plot(steps, R, label='Recovered')
-# plt.xlabel('Time Step')
-# plt.ylabel('Number of Individuals')
-# plt.title('SIR Disease Spread Simulation')
-# plt.legend()
-# plt.grid()
-# plt.show()
+
