@@ -30,7 +30,7 @@ def assign_demographics(G, vaccinated_nodes=None):
         # Vaccination reduces susceptibility
         is_vaccinated = node in vaccinated_nodes
         if is_vaccinated:
-            susceptibility *= 0.1  # 90% effective
+            susceptibility *= 0.5
         G.nodes[node]['vaccinated'] = is_vaccinated
 
         G.nodes[node]['age'] = age
@@ -53,8 +53,9 @@ def mark_super_spreaders(G, fraction=0.05, multiplier=2.0):
 
 
 
-def create_social_network(infection_prob=0.1, vaccination_rate=0.3):
-    G = nx.barabasi_albert_graph(n=250, m=3)
+def create_social_network(n, vaccination_rate):
+    infection_prob = 0.1
+    G = nx.barabasi_albert_graph(n, m=3)
 
     # Randomly pick vaccinated nodes
     num_vaccinated = int(len(G.nodes) * vaccination_rate)
